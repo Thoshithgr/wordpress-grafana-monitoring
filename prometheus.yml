@@ -1,0 +1,181 @@
+# Prometheus configuration file for WordPress + Grafana monitoring stack
+# This file defines data sources, scraping intervals, and monitoring targets
+
+# Global configuration
+global:
+  # How frequently to scrape targets by default (15 seconds)
+  scrape_interval: 15s
+  
+  # How frequently to evaluate rules (15 seconds)
+  evaluation_interval: 15s
+  
+  # Attach these labels to any time series or alerts when communicating with
+  # external systems (federation, remote storage, Alertmanager)
+  external_labels:
+    monitor: 'wordpress-monitoring'
+    environment: 'development'
+
+# Alertmanager configuration (optional - uncomment if using Alertmanager)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'
+rule_files:
+  # - "alert_rules.yml"
+  # - "recording_rules.yml"
+
+# A scrape configuration containing exactly one endpoint to scrape
+scrape_configs:
+  
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    # Override the global default and scrape targets from this job every 5 seconds
+    scrape_interval: 5s
+    # Timeout for scraping (default is 10s)
+    scrape_timeout: 5s
+    # The HTTP resource path on which to fetch metrics from targets
+    metrics_path: /metrics
+    # Honor labels exposed by the target
+    honor_labels: true
+    static_configs:
+      - targets: ['localhost:9090']
+    # Add custom labels to all metrics from this target
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus:9090
+
+  # Node Exporter - System metrics (CPU, Memory, Disk, Network)
+  - job_name: 'node-exporter'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['node-exporter:9100']
+    # Add custom labels
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'node_cpu_seconds_total'
+        target_label: __tmp_cpu_mode
+        replacement: '${1}'
+
+  # MySQL Exporter - Database metrics
+  - job_name: 'mysql-exporter'
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['mysql-exporter:9104']
+    # Relabel MySQL metrics
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'mysql_up'
+        target_label: service
+        replacement: 'mysql'
+
+  #WordPress Exporter
+  - job_name: "wordpress"
+    static_configs:
+      - targets: ["wordpress:80"]
+
+  #BlackBox Exporter
+  - job_name: "blackbox"
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://wordpress:80   # WordPress site
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+
+  # cAdvisor - Container metrics (Docker containers monitoring)
+  - job_name: 'cadvisor'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['cadvisor:8080']
+    # Filter out unnecessary container metrics to reduce storage
+    metric_relabel_configs:
+      # Keep only essential metrics
+      - source_labels: [__name__]
+        regex: 'container_(cpu_usage_seconds_total|memory_usage_bytes|network_receive_bytes_total|network_transmit_bytes_total|fs_usage_bytes|fs_limit_bytes|spec_memory_limit_bytes|spec_cpu_quota)'
+        action: keep
+      # Add container service labels
+      - source_labels: [container_label_com_docker_compose_service]
+        target_label: service
+      - source_labels: [container_label_com_docker_compose_project]
+        target_label: project
+
+  # WordPress Application Metrics (if WordPress exporter plugin is installed)
+  # Uncomment this section if you install a WordPress Prometheus exporter plugin
+  # - job_name: 'wordpress'
+  #   scrape_interval: 30s
+  #   scrape_timeout: 15s
+  #   metrics_path: /wp-json/prometheus/metrics
+  #   static_configs:
+  #     - targets: ['wordpress:80']
+  #   basic_auth:
+  #     username: 'your-wp-username'
+  #     password: 'your-wp-password'
+
+  # Grafana metrics (self-monitoring)
+  - job_name: 'grafana'
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['grafana:3000']
+    # Grafana authentication (if required)
+    # basic_auth:
+    #   username: 'admin'
+    #   password: 'admin123'
+
+  # Custom application metrics endpoint (example)
+  # - job_name: 'custom-app'
+  #   scrape_interval: 30s
+  #   static_configs:
+  #     - targets: ['app:8080']
+  #   metrics_path: /metrics
+
+  # Blackbox exporter for endpoint monitoring (uncomment if using)
+  # - job_name: 'blackbox-http'
+  #   metrics_path: /probe
+  #   params:
+  #     module: [http_2xx]
+  #   static_configs:
+  #     - targets:
+  #       - http://wordpress:80
+  #       - http://grafana:3000
+  #   relabel_configs:
+  #     - source_labels: [__address__]
+  #       target_label: __param_target
+  #     - source_labels: [__param_target]
+  #       target_label: instance
+  #     - target_label: __address__
+  #       replacement: blackbox-exporter:9115
+
+# Remote write configuration (for long-term storage)
+# remote_write:
+#   - url: "http://remote-prometheus:9090/api/v1/write"
+#     queue_config:
+#       max_samples_per_send: 1000
+#       max_shards: 200
+#       capacity: 2500
+
+# Remote read configuration
+# remote_read:
+#   - url: "http://remote-prometheus:9090/api/v1/read"
